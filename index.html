@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Space Scene</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const starCount = 100;
+    const baseAsteroidSpawnInterval = 800;
+    const levelDuration = 15000;
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const ship = {
+      x: 0,
+      width: 40,
+      height: 50,
+      yOffset: 60,
+      speed: 6
+    };
+    const keys = {
+      ArrowLeft: false,
+      ArrowRight: false
+    };
+    let stars = [];
+    let asteroids = [];
+    let lastAsteroidSpawn = 0;
+    let gameOver = false;
+    let startTime = 0;
+    let survivalTime = 0;
+    let score = 0;
+    let level = 1;
+    let gameOverSoundPlayed = false;
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      ship.x = Math.min(
+        Math.max(ship.width / 2, ship.x || canvas.width / 2),
+        canvas.width - ship.width / 2
+      );
+      createStars();
+    }
+
+    function createStars() {
+      stars = Array.from({ length: starCount }, () => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        radius: Math.random() * 1.5 + 0.5
+      }));
+    }
+
+    function drawStars() {
+      ctx.fillStyle = "#fff";
+      for (const star of stars) {
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawShip() {
+      const shipX = ship.x;
+      const shipY = canvas.height - ship.yOffset;
+      const shipWidth = ship.width;
+      const shipHeight = ship.height;
+
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.moveTo(shipX, shipY - shipHeight / 2);
+      ctx.lineTo(shipX - shipWidth / 2, shipY + shipHeight / 2);
+      ctx.lineTo(shipX + shipWidth / 2, shipY + shipHeight / 2);
+      ctx.closePath();
+      ctx.fill();
+
+      if (keys.ArrowLeft || keys.ArrowRight) {
+        ctx.fillStyle = "#ff8c00";
+        ctx.beginPath();
+        ctx.moveTo(shipX, shipY + shipHeight / 2 + 18);
+        ctx.lineTo(shipX - 9, shipY + shipHeight / 2 - 2);
+        ctx.lineTo(shipX + 9, shipY + shipHeight / 2 - 2);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#ffd166";
+        ctx.beginPath();
+        ctx.moveTo(shipX, shipY + shipHeight / 2 + 10);
+        ctx.lineTo(shipX - 5, shipY + shipHeight / 2);
+        ctx.lineTo(shipX + 5, shipY + shipHeight / 2);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    function getShipCollisionBounds() {
+      const shipX = ship.x;
+      const shipY = canvas.height - ship.yOffset;
+      return {
+        left: shipX - ship.width / 2,
+        right: shipX + ship.width / 2,
+        top: shipY - ship.height / 2,
+        bottom: shipY + ship.height / 2
+      };
+    }
+
+    function spawnAsteroid(timestamp) {
+      const radius = Math.random() * 20 + 10;
+      asteroids.push({
+        x: Math.random() * canvas.width,
+        y: -radius,
+        radius,
+        speed: Math.random() * 2 + 2 + (level - 1) * 0.75,
+        scored: false,
+        angle: Math.random() * Math.PI * 2,
+        rotationSpeed: (Math.random() * 0.06 + 0.01) * (Math.random() > 0.5 ? 1 : -1)
+      });
+      lastAsteroidSpawn = timestamp;
+    }
+
+    function updateAsteroids(timestamp) {
+      const spawnInterval = Math.max(250, baseAsteroidSpawnInterval - (level - 1) * 100);
+      if (timestamp - lastAsteroidSpawn >= spawnInterval) {
+        spawnAsteroid(timestamp);
+      }
+
+      asteroids = asteroids.filter((asteroid) => {
+        asteroid.y += asteroid.speed;
+        asteroid.angle += asteroid.rotationSpeed;
+        if (!asteroid.scored && asteroid.y - asteroid.radius > canvas.height - ship.yOffset) {
+          asteroid.scored = true;
+          score += 10;
+        }
+        return asteroid.y - asteroid.radius <= canvas.height;
+      });
+    }
+
+    function drawAsteroids() {
+      for (const asteroid of asteroids) {
+        ctx.save();
+        ctx.translate(asteroid.x, asteroid.y);
+        ctx.rotate(asteroid.angle);
+        ctx.fillStyle = "#888";
+        ctx.beginPath();
+        ctx.arc(0, 0, asteroid.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#666";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-asteroid.radius * 0.55, -asteroid.radius * 0.2);
+        ctx.lineTo(asteroid.radius * 0.45, -asteroid.radius * 0.35);
+        ctx.moveTo(-asteroid.radius * 0.3, asteroid.radius * 0.35);
+        ctx.lineTo(asteroid.radius * 0.35, asteroid.radius * 0.15);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    function playGameOverSound() {
+      if (gameOverSoundPlayed) {
+        return;
+      }
+
+      const now = audioContext.currentTime;
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.type = "sawtooth";
+      oscillator.frequency.setValueAtTime(280, now);
+      oscillator.frequency.exponentialRampToValueAtTime(90, now + 0.6);
+
+      gainNode.gain.setValueAtTime(0.0001, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.65);
+
+      gameOverSoundPlayed = true;
+    }
+
+    function resetGame() {
+      asteroids = [];
+      lastAsteroidSpawn = 0;
+      gameOver = false;
+      startTime = 0;
+      survivalTime = 0;
+      score = 0;
+      level = 1;
+      gameOverSoundPlayed = false;
+      ship.x = canvas.width / 2;
+      keys.ArrowLeft = false;
+      keys.ArrowRight = false;
+      requestAnimationFrame(gameLoop);
+    }
+
+    function drawScene() {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      drawStars();
+      drawAsteroids();
+      drawShip();
+      drawHud();
+    }
+
+    function drawHud() {
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "left";
+      ctx.font = "24px sans-serif";
+      ctx.fillText(`Score: ${score}`, 20, 36);
+      ctx.fillText(`Level: ${level}`, 20, 68);
+    }
+
+    function drawGameOver() {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.font = "bold 48px sans-serif";
+      ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+      ctx.font = "24px sans-serif";
+      ctx.fillText(
+        `Survival Time: ${survivalTime.toFixed(1)} seconds`,
+        canvas.width / 2,
+        canvas.height / 2 + 30
+      );
+      ctx.fillText(`Score: ${score}`, canvas.width / 2, canvas.height / 2 + 70);
+      ctx.font = "20px sans-serif";
+      ctx.fillText("Press Space to restart", canvas.width / 2, canvas.height / 2 + 110);
+    }
+
+    function updateShip() {
+      if (keys.ArrowLeft) {
+        ship.x -= ship.speed;
+      }
+      if (keys.ArrowRight) {
+        ship.x += ship.speed;
+      }
+
+      const halfWidth = ship.width / 2;
+      ship.x = Math.max(halfWidth, Math.min(canvas.width - halfWidth, ship.x));
+    }
+
+    function checkCollisions() {
+      const shipBounds = getShipCollisionBounds();
+      return asteroids.some((asteroid) => {
+        const closestX = Math.max(shipBounds.left, Math.min(asteroid.x, shipBounds.right));
+        const closestY = Math.max(shipBounds.top, Math.min(asteroid.y, shipBounds.bottom));
+        const dx = asteroid.x - closestX;
+        const dy = asteroid.y - closestY;
+        return dx * dx + dy * dy <= asteroid.radius * asteroid.radius;
+      });
+    }
+
+    function gameLoop(timestamp) {
+      if (!startTime) {
+        startTime = timestamp;
+      }
+
+      if (gameOver) {
+        drawScene();
+        drawGameOver();
+        return;
+      }
+
+      updateAsteroids(timestamp);
+      updateShip();
+      survivalTime = (timestamp - startTime) / 1000;
+      level = Math.floor((timestamp - startTime) / levelDuration) + 1;
+      if (checkCollisions()) {
+        gameOver = true;
+        playGameOverSound();
+      }
+      drawScene();
+      if (gameOver) {
+        drawGameOver();
+        return;
+      }
+      requestAnimationFrame(gameLoop);
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key in keys) {
+        keys[event.key] = true;
+      }
+      if (event.code === "Space") {
+        event.preventDefault();
+        if (audioContext.state === "suspended") {
+          audioContext.resume();
+        }
+        if (gameOver) {
+          resetGame();
+        }
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      if (event.key in keys) {
+        keys[event.key] = false;
+      }
+    });
+
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
